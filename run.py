@@ -86,8 +86,15 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
         gc.collect()
         
+        # train_images, train_labels, val_images, val_labels = load_ddsm(
+        #     TRAIN_DIR, VAL_DIR, use_mask=True
+        # )
+
+        # APRÈS
         train_images, train_labels, val_images, val_labels = load_ddsm(
-            TRAIN_DIR, VAL_DIR, use_mask=True
+            TRAIN_DIR, VAL_DIR, 
+            use_mask=True,
+            mask_background_flag=True  # ✅ ACTIVER le masquage
         )
 
         start_time = time.time()
