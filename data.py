@@ -1,32 +1,63 @@
 # ============================================================
-# data.py — Chargement cache 128×128 AVEC MASQUAGE
+# data.py — CROP ROI mammaire
 # ============================================================
 
 import os
 import torch
+import cv2
+import numpy as np
 
 CACHE_PATH = "/content/drive/MyDrive/MiniDDSM/miniddsm_cache_128.pt"
 
 
-def mask_background(img, threshold=0.1):
+def crop_breast_roi(img_tensor, target_size=128):
     """
-    Remplace l'arrière-plan noir par gris neutre.
+    Détecte la ROI mammaire et crop/resize.
     
     Args:
-        img: Tensor (128, 128), valeurs [0, 1]
-        threshold: Pixels < threshold = arrière-plan
+        img_tensor: Tensor (128, 128), valeurs [0, 1]
+        target_size: Taille de sortie
     
     Returns:
-        img_masked: Tensor (128, 128), arrière-plan = 0.5
+        Tensor (target_size, target_size) croppé sur le sein
     """
-    img_masked = img.clone()
-    img_masked[img < threshold] = 0.5
-    return img_masked
+    # Convertir en numpy uint8
+    img_np = (img_tensor.numpy() * 255).astype(np.uint8)
+    
+    # Binariser pour détecter le sein (seuil à 25/255 ≈ 0.1)
+    _, binary = cv2.threshold(img_np, 25, 255, cv2.THRESH_BINARY)
+    
+    # Trouver contours
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if len(contours) == 0:
+        # Fallback : retourner image originale
+        return img_tensor
+    
+    # Plus grand contour = sein
+    largest_contour = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest_contour)
+    
+    # Ajouter marge 5%
+    margin = int(0.05 * max(w, h))
+    x = max(0, x - margin)
+    y = max(0, y - margin)
+    w = min(img_np.shape[1] - x, w + 2 * margin)
+    h = min(img_np.shape[0] - y, h + 2 * margin)
+    
+    # Crop
+    cropped = img_np[y:y+h, x:x+w]
+    
+    # Resize à target_size
+    resized = cv2.resize(cropped, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
+    
+    # Reconvertir en tensor [0, 1]
+    return torch.from_numpy(resized.astype(np.float32) / 255.0)
 
 
 def load_ddsm(train_dir=None, val_dir=None, img_size=128, use_mask=False, 
-              mask_background_flag=False):  # ✅ NOUVEAU paramètre
-    """Charge depuis cache MiniDDSM 128×128 avec initialisation équilibrée."""
+              crop_roi=False):
+    """Charge depuis cache MiniDDSM avec option CROP ROI."""
     if not os.path.exists(CACHE_PATH):
         raise FileNotFoundError(f"Cache non trouvé : {CACHE_PATH}")
     
@@ -38,25 +69,25 @@ def load_ddsm(train_dir=None, val_dir=None, img_size=128, use_mask=False,
     val_images   = data["val_images"]
     val_labels   = data["val_labels"]
     
-    # ✅ MASQUER arrière-plan SI demandé (AVANT l'entrelacement)
-    if mask_background_flag:
-        print("[MASQUAGE] Remplacement arrière-plan noir par gris neutre (0.5)...")
-        train_images = [mask_background(img, threshold=0.1) for img in train_images]
-        val_images = [mask_background(img, threshold=0.1) for img in val_images]
-        print("[OK] Arrière-plan masqué sur train + val")
+    # ✅ CROP ROI SI demandé
+    if crop_roi:
+        print("[CROP ROI] Extraction région mammaire...")
+        train_images = [crop_breast_roi(img, target_size=img_size) for img in train_images]
+        val_images = [crop_breast_roi(img, target_size=img_size) for img in val_images]
+        print("[OK] ROI extraite sur train + val")
     
     # Séparer par classe
     cancer_idx = [i for i, l in enumerate(train_labels) if l == 0]
     normal_idx = [i for i, l in enumerate(train_labels) if l == 1]
     
-    # Mélanger CHAQUE classe séparément
+    # Mélanger
     cancer_perm = torch.randperm(len(cancer_idx))
     normal_perm = torch.randperm(len(normal_idx))
     
     cancer_shuffled = [cancer_idx[i] for i in cancer_perm]
     normal_shuffled = [normal_idx[i] for i in normal_perm]
     
-    # Entrelacer Cancer/Normal pour alternance parfaite
+    # Entrelacer
     train_images_balanced = []
     train_labels_balanced = []
     

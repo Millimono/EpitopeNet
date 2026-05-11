@@ -25,7 +25,7 @@ EPOCHS      = 40
 LR          = 0.1
 NUM_CELLS   = 6400
 PATCH_SIZES = [(5, 5), (9, 9), (13, 13)]
-THETA_INIT  = 0.8
+THETA_INIT  = 0.5
 SEEDS       = [42]
 K           = 1
 USE_INTENSITY = True
@@ -91,11 +91,18 @@ if __name__ == "__main__":
         # )
 
         # APRÈS
+        # train_images, train_labels, val_images, val_labels = load_ddsm(
+        #     TRAIN_DIR, VAL_DIR, 
+        #     use_mask=True,
+        #     mask_background_flag=True  # ✅ ACTIVER le masquage
+        # )
+
         train_images, train_labels, val_images, val_labels = load_ddsm(
             TRAIN_DIR, VAL_DIR, 
             use_mask=True,
-            mask_background_flag=True  # ✅ ACTIVER le masquage
+            crop_roi=True  # ✅ ACTIVER
         )
+
 
         start_time = time.time()
 
