@@ -1,5 +1,5 @@
 # ============================================================
-# run.py — Version LVQ simple
+# run.py — Version LVQ avec visualisations
 # ============================================================
 
 import os
@@ -12,6 +12,7 @@ from sklearn.metrics import f1_score, roc_auc_score, classification_report
 from data  import load_ddsm
 from train import run_experiment
 from save_load import save_model
+from interpretability import visualize_best_model
 
 # ============================================================
 # CONFIG
@@ -91,7 +92,6 @@ if __name__ == "__main__":
 
         start_time = time.time()
 
-        # ✅ APPEL SIMPLIFIÉ (sans save_viz_every, viz_dir)
         acc, pop, trainer, history = run_experiment(
             train_images, train_labels,
             val_images,   val_labels,
@@ -162,7 +162,21 @@ if __name__ == "__main__":
             save_path = "figs/learning_curve_lvq.png"
         )
 
+    # ✅ VISUALISATIONS
+    if best_pop is not None and best_trainer is not None:
+        print("\n=== GÉNÉRATION VISUALISATIONS ===")
+        visualize_best_model(
+            pop=best_pop,
+            trainer=best_trainer,
+            val_images=best_val_images,
+            val_labels=best_val_labels,
+            class_names=["Cancer", "Normal"],
+            save_dir="figs/best_model_viz",
+            n_examples=16
+        )
+
     print("\n[OK] Terminé !")
     print(f"{'='*60}")
     print(f"Modèle sauvegardé : figs/model_multiscale_lvq_best.pt")
+    print(f"Visualisations    : figs/best_model_viz/")
     print(f"{'='*60}")
