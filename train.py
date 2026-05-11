@@ -1,5 +1,5 @@
 # ============================================================
-# train.py — LVQ simple conforme à l'article
+# train.py — LVQ GPU conforme à l'article
 # ============================================================
 
 import torch
@@ -41,7 +41,7 @@ def run_experiment(train_images, train_labels, val_images, val_labels,
                    num_cells=6400, patch_sizes=[(5,5), (9,9), (13,13)],
                    theta_init=0.5, K=1, device="cuda",
                    use_intensity=True):
-    """Training LVQ simple conforme à l'article."""
+    """Training LVQ GPU conforme à l'article."""
     
     print(f"\n{'='*50}")
     print(f"EXPÉRIENCE : {name}")
@@ -70,6 +70,7 @@ def run_experiment(train_images, train_labels, val_images, val_labels,
     for epoch in range(epochs):
         lr_epoch = lr * (0.95 ** epoch)
         
+        # ✅ CHANGEMENT : Appel GPU
         trainer.train_batch(train_images, train_labels, batch_size=2, lr=lr_epoch)
         pop.reassign_proto_class(train_images, train_labels, device, batch_size=2)
         preds = trainer.predict_batch(val_images, batch_size=4)
