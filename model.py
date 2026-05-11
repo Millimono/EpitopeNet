@@ -1,5 +1,5 @@
 # ============================================================
-# model.py — LVQ simple conforme à l'article (CORRIGÉ)
+# model.py — LVQ FULL GPU vectorisé
 # ============================================================
 
 import torch
@@ -8,8 +8,8 @@ import torch.nn.functional as F
 
 class PopulationBMultiScale:
     """
-    Population multi-échelle conforme à l'article.
-    Apprentissage LVQ simple sans gradient descent.
+    Population multi-échelle LVQ 100% GPU.
+    Toutes les opérations vectorisées, zéro boucle Python sur prototypes.
     """
     
     def __init__(self, num_cells, patch_sizes, theta_init, beta, 
@@ -52,7 +52,7 @@ class PopulationBMultiScale:
                 torch.full((B_scale,), -1, dtype=torch.long, device=device)
             )
         
-        print(f"[Multi-scale LVQ] {self.n_scales} échelles (intensité: {use_intensity}):")
+        print(f"[Multi-scale LVQ GPU] {self.n_scales} échelles (intensité: {use_intensity}):")
         for i, ps in enumerate(patch_sizes):
             D_feat = (ps[0] * ps[1] + 1) if use_intensity else (ps[0] * ps[1])
             print(f"  Échelle {i}: {ps[0]}×{ps[1]} → {self.B_per_scale[i]} protos, {D_feat} features")
@@ -67,35 +67,21 @@ class PopulationBMultiScale:
         return patches.transpose(1, 2)
     
     def preprocess_patches(self, patches, keep_intensity=True):
-        """
-        Normalisation patches + feature intensité optionnelle.
-        
-        patches: (N, P, D) où D = p*p
-        """
+        """Normalisation patches + feature intensité optionnelle."""
         if not self.use_intensity or not keep_intensity:
             mean = patches.mean(dim=-1, keepdim=True)
             std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
             return (patches - mean) / std
         
-        # Feature intensité = moyenne AVANT normalisation
         intensity = patches.mean(dim=-1, keepdim=True)
-        
-        # Normalisation texture
         mean = patches.mean(dim=-1, keepdim=True)
         std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
         patches_norm = (patches - mean) / std
         
-        # Concaténer texture + intensité
         return torch.cat([patches_norm, intensity], dim=-1)
     
     def process_batch(self, images):
-        """
-        Traite un batch d'images pour toutes les échelles.
-        
-        Returns:
-            all_activated: liste de (N, B_scale) booléens
-            all_z: liste de (N, B_scale, D) patches capturés
-        """
+        """Traite un batch d'images pour toutes les échelles."""
         images = images.to(self.device)
         all_activated = []
         all_z = []
@@ -130,24 +116,22 @@ class PopulationBMultiScale:
         
         return all_activated, all_z
     
-    def update_batch_lvq(self, all_activated, all_z, labels, lr=0.1):
+    def update_batch_lvq_gpu(self, all_activated, all_z, labels, lr=0.1):
         """
-        LVQ simple conforme à l'article.
-        
-        Args:
-            labels: liste d'int (pas de tensors)
+        LVQ 100% GPU vectorisé.
+        Pas de boucle Python sur prototypes.
         """
         N = len(labels)
+        labels_t = torch.tensor(labels, device=self.device, dtype=torch.long)
         
         for scale_idx in range(self.n_scales):
             activated = all_activated[scale_idx]  # (N, B_scale)
             z = all_z[scale_idx]                   # (N, B_scale, D)
             
-            # ✅ Mettre à jour compteurs
+            # ✅ Mettre à jour compteurs (vectorisé)
             for i in range(N):
-                lbl = labels[i] if isinstance(labels[i], int) else labels[i].item()  # ← FIX
+                lbl = labels_t[i].item()
                 act = activated[i]
-                
                 if not act.any():
                     continue
                 
@@ -158,34 +142,39 @@ class PopulationBMultiScale:
             self.proto_class[scale_idx] = self.class_counts[scale_idx].argmax(dim=1)
             self.proto_class[scale_idx][self.class_counts[scale_idx].sum(dim=1) == 0] = -1
             
-            # ✅ LVQ update
+            # ✅ LVQ UPDATE VECTORISÉ (pas de boucle sur prototypes)
+            proto_updates = torch.zeros_like(self.prototypes[scale_idx])
+            
             for i in range(N):
-                lbl = labels[i] if isinstance(labels[i], int) else labels[i].item()  # ← FIX
-                act_i = activated[i]
+                lbl = labels_t[i].item()
+                act_i = activated[i]  # (B_scale,) booléen
                 
                 if not act_i.any():
                     continue
                 
-                for proto_idx in torch.where(act_i)[0]:
-                    proto_class = self.proto_class[scale_idx][proto_idx].item()
-                    
-                    if proto_class < 0:
-                        continue
-                    
-                    patch_captured = z[i, proto_idx]
-                    
-                    if proto_class == lbl:
-                        # Rapprocher
-                        self.prototypes[scale_idx][proto_idx] += lr * (
-                            patch_captured - self.prototypes[scale_idx][proto_idx]
-                        )
-                    else:
-                        # Éloigner
-                        self.prototypes[scale_idx][proto_idx] -= lr * (
-                            patch_captured - self.prototypes[scale_idx][proto_idx]
-                        )
+                # Patches capturés
+                z_active = z[i][act_i]  # (n_active, D)
+                protos_active = self.prototypes[scale_idx][act_i]  # (n_active, D)
+                classes_active = self.proto_class[scale_idx][act_i]  # (n_active,)
+                
+                # Différence
+                diff = z_active - protos_active  # (n_active, D)
+                
+                # Masques
+                same_class = (classes_active == lbl) & (classes_active >= 0)
+                diff_class = (classes_active != lbl) & (classes_active >= 0)
+                
+                # Gradients
+                grads_active = torch.zeros_like(diff)
+                grads_active[same_class] = diff[same_class]   # Rapprocher
+                grads_active[diff_class] = -diff[diff_class]  # Éloigner
+                
+                # Accumuler
+                active_indices = torch.where(act_i)[0]
+                proto_updates.index_add_(0, active_indices, grads_active)
             
-            # Clamp
+            # ✅ Appliquer updates
+            self.prototypes[scale_idx] += lr * proto_updates
             self.prototypes[scale_idx].clamp_(-5.0, 5.0)
     
     def reassign_proto_class(self, train_images, train_labels, device, batch_size=2):
@@ -194,12 +183,11 @@ class PopulationBMultiScale:
             self.class_counts[scale_idx].zero_()
         
         images_t = torch.stack(train_images).to(device)
-        labels_t = train_labels  # ✅ Garder liste d'int
         
         for start in range(0, len(images_t), batch_size):
             end = min(start + batch_size, len(images_t))
             all_activated, _ = self.process_batch(images_t[start:end])
-            lbls_b = labels_t[start:end]
+            lbls_b = train_labels[start:end]
             
             for scale_idx in range(self.n_scales):
                 activated = all_activated[scale_idx]
@@ -239,9 +227,8 @@ class TrainerMultiScale:
         self.num_classes = num_classes
     
     def train_batch(self, images, labels, batch_size=2, lr=0.1):
-        """Training LVQ simple."""
+        """Training LVQ GPU."""
         images_t = torch.stack(images).to(self.device)
-        labels_t = labels  # ✅ Garder liste
         
         for start in range(0, len(images_t), batch_size):
             end = min(start + batch_size, len(images_t))
@@ -250,8 +237,8 @@ class TrainerMultiScale:
             if not any(a.any() for a in all_activated):
                 continue
             
-            self.population.update_batch_lvq(
-                all_activated, all_z, labels_t[start:end], lr
+            self.population.update_batch_lvq_gpu(
+                all_activated, all_z, labels[start:end], lr
             )
     
     def predict_batch(self, images, batch_size=4):
