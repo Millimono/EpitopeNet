@@ -1,5 +1,5 @@
 # ============================================================
-# model.py — LVQ simple conforme à l'article
+# model.py — LVQ simple conforme à l'article (CORRIGÉ)
 # ============================================================
 
 import torch
@@ -31,112 +31,111 @@ class PopulationBMultiScale:
             self.B_per_scale[i] += 1
         
         # Initialisation prototypes
-        D = patch_sizes[0][0] * patch_sizes[0][1]
-        if use_intensity:
-            D += 1
+        self.prototypes = []
+        self.class_counts = []
+        self.proto_class = []
         
-        self.prototypes = [
-            torch.randn(B_scale, D, device=device) * 0.1
-            for B_scale in self.B_per_scale
-        ]
+        for i, (ph, pw) in enumerate(patch_sizes):
+            D = ph * pw
+            if use_intensity:
+                D += 1
+            
+            B_scale = self.B_per_scale[i]
+            
+            self.prototypes.append(
+                torch.randn(B_scale, D, device=device) * 0.1
+            )
+            self.class_counts.append(
+                torch.zeros(B_scale, num_classes, device=device)
+            )
+            self.proto_class.append(
+                torch.full((B_scale,), -1, dtype=torch.long, device=device)
+            )
         
-        self.class_counts = [
-            torch.zeros(B_scale, num_classes, device=device)
-            for B_scale in self.B_per_scale
-        ]
-        
-        self.proto_class = [
-            torch.full((B_scale,), -1, dtype=torch.long, device=device)
-            for B_scale in self.B_per_scale
-        ]
+        print(f"[Multi-scale LVQ] {self.n_scales} échelles (intensité: {use_intensity}):")
+        for i, ps in enumerate(patch_sizes):
+            D_feat = (ps[0] * ps[1] + 1) if use_intensity else (ps[0] * ps[1])
+            print(f"  Échelle {i}: {ps[0]}×{ps[1]} → {self.B_per_scale[i]} protos, {D_feat} features")
     
     def extract_patches_batch(self, images, patch_size):
         """Extraction patches par convolution."""
-        B, H, W = images.shape
-        p_h, p_w = patch_size
-        
         patches = F.unfold(
             images.unsqueeze(1),
-            kernel_size=(p_h, p_w),
+            kernel_size=patch_size,
             stride=1
         )
-        
-        patches = patches.transpose(1, 2)
-        return patches
+        return patches.transpose(1, 2)
     
     def preprocess_patches(self, patches, keep_intensity=True):
         """
         Normalisation patches + feature intensité optionnelle.
         
-        patches: (B, P, D) où D = p*p
+        patches: (N, P, D) où D = p*p
         """
-        B, P, D = patches.shape
+        if not self.use_intensity or not keep_intensity:
+            mean = patches.mean(dim=-1, keepdim=True)
+            std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
+            return (patches - mean) / std
         
-        # Normalisation Z-score
-        mean = patches.mean(dim=2, keepdim=True)
-        std = patches.std(dim=2, keepdim=True).clamp(min=1e-8)
+        # Feature intensité = moyenne AVANT normalisation
+        intensity = patches.mean(dim=-1, keepdim=True)
+        
+        # Normalisation texture
+        mean = patches.mean(dim=-1, keepdim=True)
+        std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
         patches_norm = (patches - mean) / std
         
-        if keep_intensity and self.use_intensity:
-            # Feature intensité = moyenne pré-normalisation
-            intensity = mean.squeeze(2)  # (B, P)
-            patches_final = torch.cat([patches_norm, intensity.unsqueeze(2)], dim=2)
-        else:
-            patches_final = patches_norm
-        
-        return patches_final
+        # Concaténer texture + intensité
+        return torch.cat([patches_norm, intensity], dim=-1)
     
-    def compute_activations(self, patches, scale_idx):
+    def process_batch(self, images):
         """
-        Calcul similarités gaussiennes.
-        
-        patches: (B, P, D)
-        prototypes: (B_scale, D)
+        Traite un batch d'images pour toutes les échelles.
         
         Returns:
-            activated: (B, B_scale) booléen
-            z: (B, B_scale, D) patches capturés
+            all_activated: liste de (N, B_scale) booléens
+            all_z: liste de (N, B_scale, D) patches capturés
         """
-        B, P, D = patches.shape
-        B_scale = self.prototypes[scale_idx].shape[0]
+        images = images.to(self.device)
+        all_activated = []
+        all_z = []
         
-        # Distance euclidienne²
-        patches_flat = patches.reshape(B * P, D)
-        protos = self.prototypes[scale_idx]
+        for scale_idx, patch_size in enumerate(self.patch_sizes):
+            patches = self.extract_patches_batch(images, patch_size)
+            patches_std = self.preprocess_patches(patches, keep_intensity=True)
+            protos = self.prototypes[scale_idx]
+            
+            N, P, D = patches_std.shape
+            B_scale = protos.shape[0]
+            
+            # Distances
+            patches_sq = (patches_std ** 2).sum(dim=-1)
+            protos_sq = (protos ** 2).sum(dim=-1)
+            dot = torch.einsum("npd,bd->nbp", patches_std, protos)
+            dists_sq = (patches_sq.unsqueeze(1) + 
+                       protos_sq.view(1, B_scale, 1) - 2 * dot).clamp(min=0)
+            
+            # Top-K
+            topk_dists, topk_idx = dists_sq.topk(self.K, dim=2, largest=False)
+            sim = torch.exp(-topk_dists.mean(dim=2) / D ** 0.5)
+            activated = (sim >= self.theta).bool()
+            
+            # Agréger patches capturés
+            topk_idx_exp = topk_idx.unsqueeze(-1).expand(-1, -1, -1, D)
+            patches_exp = patches_std.unsqueeze(1).expand(-1, B_scale, -1, -1)
+            z = patches_exp.gather(2, topk_idx_exp).mean(dim=2)
+            
+            all_activated.append(activated)
+            all_z.append(z)
         
-        dist_sq = torch.cdist(patches_flat, protos, p=2) ** 2
-        dist_sq = dist_sq.reshape(B, P, B_scale)
-        
-        # Top-K patches
-        topk_dist, topk_idx = dist_sq.topk(self.K, dim=1, largest=False)
-        
-        # Similarité gaussienne
-        p_size = self.patch_sizes[scale_idx][0] * self.patch_sizes[scale_idx][1]
-        if self.use_intensity:
-            p_size += 1
-        
-        similarities = torch.exp(-topk_dist.mean(dim=1) / p_size)  # (B, B_scale)
-        
-        # Activation binaire
-        activated = similarities >= self.theta
-        
-        # Patches capturés (closest)
-        closest_idx = topk_idx[:, 0, :]  # (B, B_scale)
-        z = torch.gather(
-            patches,
-            1,
-            closest_idx.unsqueeze(2).expand(-1, -1, D)
-        )
-        
-        return activated, z
+        return all_activated, all_z
     
     def update_batch_lvq(self, all_activated, all_z, labels, lr=0.1):
         """
         LVQ simple conforme à l'article.
         
-        Règle :
-        - Même classe : rapprocher
-        - Classe différente : éloigner
+        Args:
+            labels: liste d'int (pas de tensors)
         """
         N = len(labels)
         
@@ -144,15 +143,14 @@ class PopulationBMultiScale:
             activated = all_activated[scale_idx]  # (N, B_scale)
             z = all_z[scale_idx]                   # (N, B_scale, D)
             
-            # Mettre à jour compteurs
+            # ✅ Mettre à jour compteurs
             for i in range(N):
-                lbl = labels[i].item()
+                lbl = labels[i] if isinstance(labels[i], int) else labels[i].item()  # ← FIX
                 act = activated[i]
                 
                 if not act.any():
                     continue
                 
-                # Décroissance + incrément
                 self.class_counts[scale_idx][act] *= 0.99
                 self.class_counts[scale_idx][act, lbl] += 1
             
@@ -160,9 +158,9 @@ class PopulationBMultiScale:
             self.proto_class[scale_idx] = self.class_counts[scale_idx].argmax(dim=1)
             self.proto_class[scale_idx][self.class_counts[scale_idx].sum(dim=1) == 0] = -1
             
-            # LVQ update
+            # ✅ LVQ update
             for i in range(N):
-                lbl = labels[i].item()
+                lbl = labels[i] if isinstance(labels[i], int) else labels[i].item()  # ← FIX
                 act_i = activated[i]
                 
                 if not act_i.any():
@@ -190,122 +188,100 @@ class PopulationBMultiScale:
             # Clamp
             self.prototypes[scale_idx].clamp_(-5.0, 5.0)
     
-    def reassign_proto_class(self, images, labels, device, batch_size=4):
+    def reassign_proto_class(self, train_images, train_labels, device, batch_size=2):
         """Réassignation classes en fin d'epoch (normalisation fréquence)."""
         for scale_idx in range(self.n_scales):
             self.class_counts[scale_idx].zero_()
         
-        # Accumuler compteurs
-        for i in range(0, len(images), batch_size):
-            batch_imgs = images[i:i+batch_size]
-            batch_lbls = labels[i:i+batch_size]
+        images_t = torch.stack(train_images).to(device)
+        labels_t = train_labels  # ✅ Garder liste d'int
+        
+        for start in range(0, len(images_t), batch_size):
+            end = min(start + batch_size, len(images_t))
+            all_activated, _ = self.process_batch(images_t[start:end])
+            lbls_b = labels_t[start:end]
             
-            imgs_batch = torch.stack(batch_imgs).to(device)
-            
-            for scale_idx, patch_size in enumerate(self.patch_sizes):
-                patches = self.extract_patches_batch(imgs_batch, patch_size)
-                patches = self.preprocess_patches(patches, keep_intensity=True)
-                
-                activated, _ = self.compute_activations(patches, scale_idx)
-                
-                for j, lbl in enumerate(batch_lbls):
-                    act = activated[j]
-                    self.class_counts[scale_idx][act, lbl] += 1
-            
-            del imgs_batch
-            torch.cuda.empty_cache()
+            for scale_idx in range(self.n_scales):
+                activated = all_activated[scale_idx]
+                for i in range(end - start):
+                    lbl = lbls_b[i] if isinstance(lbls_b[i], int) else lbls_b[i].item()
+                    self.class_counts[scale_idx][activated[i], lbl] += 1
         
         # Normaliser par fréquence classe
-        class_freq = torch.zeros(self.num_classes, device=device)
-        for lbl in labels:
-            class_freq[lbl] += 1
-        
         for scale_idx in range(self.n_scales):
-            counts_norm = self.class_counts[scale_idx] / (class_freq.unsqueeze(0) + 1e-8)
-            self.proto_class[scale_idx] = counts_norm.argmax(dim=1)
-            self.proto_class[scale_idx][self.class_counts[scale_idx].sum(dim=1) == 0] = -1
+            assigned = self.class_counts[scale_idx].sum(dim=1) > 0
+            n_assigned = assigned.sum().item()
+            
+            class_freq = self.class_counts[scale_idx].sum(dim=0).clamp(min=1)
+            counts_norm = self.class_counts[scale_idx] / class_freq.unsqueeze(0)
+            self.proto_class[scale_idx][assigned] = counts_norm[assigned].argmax(dim=1)
+            self.proto_class[scale_idx][~assigned] = -1
+            
+            ps = self.patch_sizes[scale_idx]
+            print(f"    [Reassign {ps[0]}×{ps[1]}] {n_assigned}/{self.B_per_scale[scale_idx]} protos")
     
     def get_vote_weights(self, scale_idx):
         """Poids exclusivité pour vote pondéré."""
-        freq = self.class_counts[scale_idx] / (
-            self.class_counts[scale_idx].sum(dim=1, keepdim=True) + 1e-8
-        )
-        
-        exclusivity = 2 * (
-            freq.max(dim=1).values - freq.mean(dim=1)
-        )
-        exclusivity = exclusivity.clamp(0, 1)
-        
-        return exclusivity, freq
+        total = self.class_counts[scale_idx].sum(dim=1, keepdim=True).clamp(min=1)
+        freq = self.class_counts[scale_idx] / total
+        max_freq = freq.max(dim=1).values
+        mean_freq = freq.mean(dim=1)
+        weights = (max_freq - mean_freq) * 2
+        return weights, freq
 
 
 class TrainerMultiScale:
     """Trainer multi-échelle."""
     
     def __init__(self, population, num_classes, device):
-        self.pop = population
-        self.num_classes = num_classes
+        self.population = population
         self.device = device
+        self.num_classes = num_classes
     
     def train_batch(self, images, labels, batch_size=2, lr=0.1):
         """Training LVQ simple."""
-        for i in range(0, len(images), batch_size):
-            batch_imgs = images[i:i+batch_size]
-            batch_lbls = labels[i:i+batch_size]
+        images_t = torch.stack(images).to(self.device)
+        labels_t = labels  # ✅ Garder liste
+        
+        for start in range(0, len(images_t), batch_size):
+            end = min(start + batch_size, len(images_t))
+            all_activated, all_z = self.population.process_batch(images_t[start:end])
             
-            imgs_batch = torch.stack(batch_imgs).to(self.device)
+            if not any(a.any() for a in all_activated):
+                continue
             
-            all_activated = []
-            all_z = []
-            
-            for scale_idx, patch_size in enumerate(self.pop.patch_sizes):
-                patches = self.pop.extract_patches_batch(imgs_batch, patch_size)
-                patches = self.pop.preprocess_patches(patches, keep_intensity=True)
-                
-                activated, z = self.pop.compute_activations(patches, scale_idx)
-                
-                all_activated.append(activated)
-                all_z.append(z)
-            
-            self.pop.update_batch_lvq(all_activated, all_z, batch_lbls, lr=lr)
-            
-            del imgs_batch
-            torch.cuda.empty_cache()
+            self.population.update_batch_lvq(
+                all_activated, all_z, labels_t[start:end], lr
+            )
     
     def predict_batch(self, images, batch_size=4):
         """Prédiction par vote pondéré."""
-        predictions = []
+        images_t = torch.stack(images).to(self.device)
+        all_preds = []
         
-        for i in range(0, len(images), batch_size):
-            batch_imgs = images[i:i+batch_size]
-            imgs_batch = torch.stack(batch_imgs).to(self.device)
+        for start in range(0, len(images_t), batch_size):
+            end = min(start + batch_size, len(images_t))
+            all_activated, _ = self.population.process_batch(images_t[start:end])
             
-            votes = torch.zeros(len(batch_imgs), self.num_classes, device=self.device)
-            
-            for scale_idx, patch_size in enumerate(self.pop.patch_sizes):
-                patches = self.pop.extract_patches_batch(imgs_batch, patch_size)
-                patches = self.pop.preprocess_patches(patches, keep_intensity=True)
+            for i in range(end - start):
+                total_votes = torch.zeros(self.num_classes, device=self.device)
                 
-                activated, _ = self.pop.compute_activations(patches, scale_idx)
-                
-                exclusivity, freq = self.pop.get_vote_weights(scale_idx)
-                
-                for j in range(len(batch_imgs)):
-                    act_j = activated[j] & (self.pop.proto_class[scale_idx] >= 0)
+                for scale_idx in range(self.population.n_scales):
+                    act_i = all_activated[scale_idx][i]
+                    valid = act_i & (self.population.proto_class[scale_idx] >= 0)
                     
-                    if not act_j.any():
+                    if not valid.any():
                         continue
                     
-                    weights = exclusivity[act_j].unsqueeze(1) * freq[act_j]
-                    votes[j] += weights.sum(dim=0)
-            
-            for j in range(len(batch_imgs)):
-                if votes[j].sum() > 0:
-                    predictions.append(votes[j].argmax().item())
+                    weights, freq = self.population.get_vote_weights(scale_idx)
+                    active_freq = freq[valid]
+                    active_weights = weights[valid]
+                    votes = (active_freq * active_weights.unsqueeze(1)).sum(dim=0)
+                    total_votes += votes
+                
+                if total_votes.sum() == 0:
+                    all_preds.append(None)
                 else:
-                    predictions.append(None)
-            
-            del imgs_batch
-            torch.cuda.empty_cache()
+                    all_preds.append(total_votes.argmax().item())
         
-        return predictions
+        return all_preds
