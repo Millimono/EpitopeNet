@@ -7,15 +7,15 @@ import torch
 import cv2
 import numpy as np
 
-CACHE_PATH = "/content/drive/MyDrive/MiniDDSM/miniddsm_cache_128.pt"
+CACHE_PATH = "/content/drive/MyDrive/MiniDDSM/miniddsm_cache_256.pt"
 
 
-def crop_breast_roi(img_tensor, target_size=128):
+def crop_breast_roi(img_tensor, target_size=256):
     """
     Détecte la ROI mammaire et crop/resize.
     
     Args:
-        img_tensor: Tensor (128, 128), valeurs [0, 1]
+        img_tensor: Tensor (256, 256), valeurs [0, 1]
         target_size: Taille de sortie
     
     Returns:
