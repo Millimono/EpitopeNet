@@ -1,10 +1,10 @@
-import torch, gc, os, pandas as pd
+import torch, gc, os, pandas as pd, json
 from data  import load_ddsm
 from train import run_experiment
 from run   import set_seed, TRAIN_DIR, VAL_DIR, DEVICE, NUM_CLASSES
 
 ABLATION_SEED   = 42
-ABLATION_EPOCHS = 15
+ABLATION_EPOCHS = 10  # ✅ Réduit
 BASE_CONFIG = {
     'num_cells': 6400,
     'patch_sizes': [(10, 10), (18, 18), (28, 28)],
@@ -47,18 +47,30 @@ if __name__ == "__main__":
         )
         print(f"  ✅ crop_roi={crop} → {acc:.4f}")
         results.append({"param": "crop_roi", "value": str(crop), "acc": acc})
+        
+        # ✅ SAUVEGARDE APRÈS CHAQUE CONFIG (pas à la fin)
+        df_temp = pd.DataFrame(results)
+        df_temp.to_csv("figs/ablation_crop.csv", index=False)
+        with open("figs/ablation_crop.json", "w") as f:
+            json.dump(results, f, indent=2)
+        
+        # ✅ BACKUP DRIVE APRÈS CHAQUE CONFIG
+        try:
+            import shutil
+            drive_path = "/content/drive/MyDrive/ablation_results/"
+            os.makedirs(drive_path, exist_ok=True)
+            shutil.copy("figs/ablation_crop.csv",  f"{drive_path}ablation_crop.csv")
+            shutil.copy("figs/ablation_crop.json", f"{drive_path}ablation_crop.json")
+            print(f"  ✅ Backup Drive sauvegardé après crop_roi={crop}")
+        except:
+            pass
+        
         torch.cuda.empty_cache()
-
-    # Sauvegarder JSON + CSV
-    import json
-    df = pd.DataFrame(results)
-    df.to_csv("figs/ablation_crop.csv", index=False)
-    with open("figs/ablation_crop.json", "w") as f:
-        json.dump(results, f, indent=2)
 
     print(f"\n{'='*60}")
     print("RÉSUMÉ")
     print(f"{'='*60}")
+    df = pd.DataFrame(results)
     best_acc = df["acc"].max()
     for _, row in df.iterrows():
         marker = " ✅ BEST" if row["acc"] == best_acc else ""
@@ -66,14 +78,9 @@ if __name__ == "__main__":
 
     try:
         from google.colab import files
-        import shutil
         files.download("figs/ablation_crop.csv")
         files.download("figs/ablation_crop.json")
-        drive_path = "/content/drive/MyDrive/ablation_results/"
-        os.makedirs(drive_path, exist_ok=True)
-        shutil.copy("figs/ablation_crop.csv",  f"{drive_path}ablation_crop.csv")
-        shutil.copy("figs/ablation_crop.json", f"{drive_path}ablation_crop.json")
-        print("✅ CSV + JSON téléchargés + backup Drive !")
+        print("✅ Téléchargés !")
     except ImportError:
         pass
 
