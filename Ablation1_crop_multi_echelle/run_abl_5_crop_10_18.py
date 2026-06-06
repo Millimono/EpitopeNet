@@ -7,7 +7,7 @@ from train import run_experiment
 from run   import set_seed, TRAIN_DIR, VAL_DIR, DEVICE, NUM_CLASSES
 
 SEED, EPOCHS = 42, 15
-BASE = {'num_cells': 6400, 'theta_init': 0.5, 'lr': 0.1, 'K': 1, 'use_intensity': True}
+BASE = {'num_cells': 4266 , 'theta_init': 0.5, 'lr': 0.1, 'K': 1, 'use_intensity': True}
 
 if __name__ == "__main__":
     print("=== RUN 5 : Avec CROP, patches (10,10)+(18,18) ===\n")
