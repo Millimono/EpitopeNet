@@ -206,7 +206,7 @@ class PopulationBMultiScale:
             self.proto_class[scale_idx][~assigned] = -1
             
             ps = self.patch_sizes[scale_idx]
-            print(f"    [Reassign {ps[0]}×{ps[1]}] {n_assigned}/{self.B_per_scale[scale_idx]} protos")
+            #print(f"    [Reassign {ps[0]}×{ps[1]}] {n_assigned}/{self.B_per_scale[scale_idx]} protos")
     
     def get_vote_weights(self, scale_idx):
         """Poids exclusivité pour vote pondéré."""
