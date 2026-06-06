@@ -1,3 +1,6 @@
+import sys
+sys.path.append('/content/population-CBT-learning')
+
 import torch, gc, os, pandas as pd, json
 from data  import load_ddsm
 from train import run_experiment
