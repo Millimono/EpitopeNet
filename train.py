@@ -58,7 +58,7 @@ def run_experiment(train_images, train_labels, val_images, val_labels,
         device        = device
     )
     trainer = TrainerMultiScale(population=pop, num_classes=num_classes, device=device)
-    init_prototypes_from_data(pop, train_images, train_labels, device, n_samples=200)
+    init_prototypes_from_data(pop, train_images, train_labels, device, n_samples=50)
 
     best_acc     = 0.0
     best_protos  = [p.clone() for p in pop.prototypes]
