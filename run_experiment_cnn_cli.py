@@ -84,23 +84,57 @@ def run(args):
     )
 
     # ── Initialisation prototypes ─────────────────────────────
-    print("Initialisation prototypes depuis 50 premières images...")
-    images_init = torch.stack(train_images[:50]).to(DEVICE)
+    # print("Initialisation prototypes depuis 50 premières images...")
+    # images_init = torch.stack(train_images[:50]).to(DEVICE)
+
+    # all_patches = []
+    # for i in range(0, 50, 10):
+    #     batch = images_init[i:i+10]
+    #     for scale_idx, ps in enumerate(pop.patch_sizes):
+    #         patches = pop.extract_patches_batch(batch, ps)
+    #         patches_std = pop.preprocess_patches(patches)
+    #         all_patches.append(
+    #             patches_std.reshape(-1, patches_std.shape[-1]).cpu()
+    #         )
+    # all_p = torch.cat(all_patches, dim=0)
+    # for scale_idx in range(pop.n_scales):
+    #     B = pop.B_per_scale[scale_idx]
+    #     idx = torch.randperm(all_p.shape[0])[:B]
+    #     pop.prototypes[scale_idx] = all_p[idx].to(DEVICE)
+    # print("✅ Prototypes initialisés\n")
+
+
+    # Dans run_experiment_cnn_cli.py, remplace l'initialisation par :
+
+    print("Initialisation prototypes depuis patches CNN réels...")
     all_patches = []
-    for i in range(0, 50, 10):
-        batch = images_init[i:i+10]
-        for scale_idx, ps in enumerate(pop.patch_sizes):
-            patches = pop.extract_patches_batch(batch, ps)
-            patches_std = pop.preprocess_patches(patches)
-            all_patches.append(
-                patches_std.reshape(-1, patches_std.shape[-1]).cpu()
-            )
+
+    with torch.no_grad():
+        for i in range(0, min(50, len(train_images)), 5):
+            batch = torch.stack(train_images[i:i+5]).to(DEVICE)
+            for scale_idx, ps in enumerate(pop.patch_sizes):
+                patches = pop.extract_patches_batch(batch, ps)
+                patches_std = pop.preprocess_patches(patches)
+                # Sous-échantillonner pour éviter OOM
+                flat = patches_std.reshape(-1, patches_std.shape[-1])
+                idx  = torch.randperm(flat.shape[0])[:200]
+                all_patches.append(flat[idx].cpu())
+
     all_p = torch.cat(all_patches, dim=0)
+    print(f"Patches collectés : {all_p.shape}")
+    print(f"Min/Max : {all_p.min():.4f} / {all_p.max():.4f}")
+
     for scale_idx in range(pop.n_scales):
-        B = pop.B_per_scale[scale_idx]
+        B   = pop.B_per_scale[scale_idx]
         idx = torch.randperm(all_p.shape[0])[:B]
         pop.prototypes[scale_idx] = all_p[idx].to(DEVICE)
-    print("✅ Prototypes initialisés\n")
+
+    print("✅ Prototypes initialisés depuis patches CNN réels !")
+
+    # Vérifier les similarités maintenant
+    images_t    = torch.stack(train_images[:4]).to(DEVICE)
+    all_act, _  = pop.process_batch(images_t)
+    print(f"Protos activés : {all_act[0].float().mean():.4f}")
 
     # ── Entraînement ─────────────────────────────────────────
     start_time  = time.time()
