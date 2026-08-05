@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 CACHE_PATH = "/content/drive/MyDrive/MiniDDSM/miniddsm_cache_256.pt"
-
+# CACHE_PATH = "/data/shared/groups/IA4Covid/millimono/data_storage/miniddsm_cache_256.pt"
 
 def crop_breast_roi(img_tensor, target_size=256):
     """
