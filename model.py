@@ -272,3 +272,5 @@ class TrainerMultiScale:
                     all_preds.append(total_votes.argmax().item())
         
         return all_preds
+
+#
