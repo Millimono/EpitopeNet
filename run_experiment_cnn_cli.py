@@ -110,24 +110,29 @@ def run(args):
     all_patches = []
 
     with torch.no_grad():
-        for i in range(0, min(50, len(train_images)), 5):
+        for i in range(0, min(100, len(train_images)), 5):
             batch = torch.stack(train_images[i:i+5]).to(DEVICE)
             for scale_idx, ps in enumerate(pop.patch_sizes):
-                patches = pop.extract_patches_batch(batch, ps)
+                patches     = pop.extract_patches_batch(batch, ps)
                 patches_std = pop.preprocess_patches(patches)
-                # Sous-échantillonner pour éviter OOM
-                flat = patches_std.reshape(-1, patches_std.shape[-1])
-                idx  = torch.randperm(flat.shape[0])[:200]
+                flat        = patches_std.reshape(-1, patches_std.shape[-1])
+                idx         = torch.randperm(flat.shape[0])[:500]
                 all_patches.append(flat[idx].cpu())
 
     all_p = torch.cat(all_patches, dim=0)
+    print(f"Total patches : {all_p.shape[0]}")  # Doit être > 2133
+
     print(f"Patches collectés : {all_p.shape}")
     print(f"Min/Max : {all_p.min():.4f} / {all_p.max():.4f}")
+
 
     for scale_idx in range(pop.n_scales):
         B   = pop.B_per_scale[scale_idx]
         idx = torch.randperm(all_p.shape[0])[:B]
         pop.prototypes[scale_idx] = all_p[idx].to(DEVICE)
+
+    print(f"Protos shape : {pop.prototypes[0].shape}")
+
 
     print("✅ Prototypes initialisés depuis patches CNN réels !")
 
