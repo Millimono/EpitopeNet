@@ -1,38 +1,36 @@
-# ============================================================
-# run_experiment_cnn_cli.py — EpitopeNet + CNN figé
-# Même style que run_experiment_cli.py
-# ============================================================
-
+# run_experiment_gabor_cli.py
 import sys, argparse, importlib, torch, gc, os, json, shutil, time
 
 sys.path.insert(0, '/content/population-CBT-learning')
 
 for mod_name in list(sys.modules.keys()):
-    if mod_name in ['data', 'run', 'model', 'model_cnn', 'train', 'save_load']:
+    if mod_name in ['data', 'run', 'model', 'model_cnn', 
+                    'train', 'save_load']:
         del sys.modules[mod_name]
 importlib.invalidate_caches()
 
 from data      import load_ddsm
-from train     import run_experiment, TrainerMultiScale
+from train     import TrainerMultiScale
 from save_load import save_model
 from run       import set_seed, TRAIN_DIR, VAL_DIR, DEVICE, NUM_CLASSES
-from model_cnn import PopulationBMultiScaleCNN
+from model_cnn import PopulationBMultiScaleGabor
 
 CACHE_CLEAN = "/content/drive/MyDrive/MiniDDSM/miniddsm_val_clean_256.pt"
-DRIVE_PATH  = "/content/drive/MyDrive/ablation_results/cnn_runs/"
+DRIVE_PATH  = "/content/drive/MyDrive/ablation_results/gabor_runs/"
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--seed",        type=int,   default=42)
-    p.add_argument("--epochs",      type=int,   default=30)
-    p.add_argument("--patch",       type=str,   default="18")
-    p.add_argument("--theta",       type=float, default=0.2)
-    p.add_argument("--lr",          type=float, default=0.001)
-    p.add_argument("--num_cells",   type=int,   default=2133)
-    p.add_argument("--K",           type=int,   default=1)
-    p.add_argument("--cnn_layers",  type=int,   default=2)
-    p.add_argument("--name",        type=str,   default=None)
+    p.add_argument("--seed",          type=int,   default=42)
+    p.add_argument("--epochs",        type=int,   default=30)
+    p.add_argument("--patch",         type=str,   default="18")
+    p.add_argument("--theta",         type=float, default=0.2)
+    p.add_argument("--lr",            type=float, default=0.001)
+    p.add_argument("--num_cells",     type=int,   default=2133)
+    p.add_argument("--K",             type=int,   default=1)
+    p.add_argument("--n_orientations",type=int,   default=8)
+    p.add_argument("--n_scales",      type=int,   default=4)
+    p.add_argument("--name",          type=str,   default=None)
     if "ipykernel" in sys.modules:
         return p.parse_args(args=[])
     return p.parse_args()
@@ -43,9 +41,9 @@ def run(args):
     patch_sizes = [(p, p) for p in patch_list]
 
     run_name = args.name or (
-        f"cnn_seed{args.seed}_patch{args.patch}"
+        f"gabor_seed{args.seed}_patch{args.patch}"
         f"_theta{str(args.theta).replace('.','')}"
-        f"_layers{args.cnn_layers}"
+        f"_or{args.n_orientations}_sc{args.n_scales}"
     )
 
     print(f"\n{'='*70}\nRUN : {run_name}\n{'='*70}\n")
@@ -56,7 +54,8 @@ def run(args):
     # ── Données ──────────────────────────────────────────────
     set_seed(args.seed)
     train_images, train_labels, _, _ = load_ddsm(
-        TRAIN_DIR, VAL_DIR, img_size=256, use_mask=True, crop_roi=False
+        TRAIN_DIR, VAL_DIR, img_size=256, 
+        use_mask=True, crop_roi=False
     )
     data_clean = torch.load(CACHE_CLEAN)
     val_images = data_clean["val_images"]
@@ -65,8 +64,8 @@ def run(args):
     print(f"Train : {len(train_images)} images")
     print(f"Val   : {len(val_images)} images\n")
 
-    # ── Modèle CNN ───────────────────────────────────────────
-    pop = PopulationBMultiScaleCNN(
+    # ── Modèle Gabor ─────────────────────────────────────────
+    pop = PopulationBMultiScaleGabor(
         num_cells     = args.num_cells,
         patch_sizes   = patch_sizes,
         theta_init    = args.theta,
@@ -75,7 +74,8 @@ def run(args):
         K             = args.K,
         use_intensity = False,
         device        = DEVICE,
-        cnn_layers    = args.cnn_layers,
+        n_orientations= args.n_orientations,
+        n_scales      = args.n_scales,
     )
     trainer = TrainerMultiScale(
         population  = pop,
@@ -83,73 +83,45 @@ def run(args):
         device      = DEVICE
     )
 
-    # ── Initialisation prototypes ─────────────────────────────
-    # print("Initialisation prototypes depuis 50 premières images...")
-    # images_init = torch.stack(train_images[:50]).to(DEVICE)
-
-    # all_patches = []
-    # for i in range(0, 50, 10):
-    #     batch = images_init[i:i+10]
-    #     for scale_idx, ps in enumerate(pop.patch_sizes):
-    #         patches = pop.extract_patches_batch(batch, ps)
-    #         patches_std = pop.preprocess_patches(patches)
-    #         all_patches.append(
-    #             patches_std.reshape(-1, patches_std.shape[-1]).cpu()
-    #         )
-    # all_p = torch.cat(all_patches, dim=0)
-    # for scale_idx in range(pop.n_scales):
-    #     B = pop.B_per_scale[scale_idx]
-    #     idx = torch.randperm(all_p.shape[0])[:B]
-    #     pop.prototypes[scale_idx] = all_p[idx].to(DEVICE)
-    # print("✅ Prototypes initialisés\n")
-
-
-    # Dans run_experiment_cnn_cli.py, remplace l'initialisation par :
-
-    print("Initialisation prototypes depuis patches CNN réels...")
+    # ── Initialisation depuis patches Gabor réels ────────────
+    print("Initialisation prototypes depuis patches Gabor...")
     all_patches = []
-
     with torch.no_grad():
         for i in range(0, min(100, len(train_images)), 5):
-            batch = torch.stack(train_images[i:i+5]).to(DEVICE)
+            batch = torch.stack(
+                train_images[i:i+5]).to(DEVICE)
             for scale_idx, ps in enumerate(pop.patch_sizes):
                 patches     = pop.extract_patches_batch(batch, ps)
                 patches_std = pop.preprocess_patches(patches)
-                flat        = patches_std.reshape(-1, patches_std.shape[-1])
-                idx         = torch.randperm(flat.shape[0])[:500]
+                flat        = patches_std.reshape(
+                    -1, patches_std.shape[-1])
+                idx         = torch.randperm(
+                    flat.shape[0])[:500]
                 all_patches.append(flat[idx].cpu())
 
     all_p = torch.cat(all_patches, dim=0)
-    print(f"Total patches : {all_p.shape[0]}")  # Doit être > 2133
-
-    print(f"Patches collectés : {all_p.shape}")
+    print(f"Total patches : {all_p.shape[0]}")
     print(f"Min/Max : {all_p.min():.4f} / {all_p.max():.4f}")
-
 
     for scale_idx in range(pop.n_scales):
         B   = pop.B_per_scale[scale_idx]
         idx = torch.randperm(all_p.shape[0])[:B]
         pop.prototypes[scale_idx] = all_p[idx].to(DEVICE)
 
-    print(f"Protos shape : {pop.prototypes[0].shape}")
-
-
-    print("✅ Prototypes initialisés depuis patches CNN réels !")
-
-    # Vérifier les similarités maintenant
-    images_t    = torch.stack(train_images[:4]).to(DEVICE)
-    all_act, _  = pop.process_batch(images_t)
-    print(f"Protos activés : {all_act[0].float().mean():.4f}")
+    # Vérifier activations
+    images_t   = torch.stack(train_images[:4]).to(DEVICE)
+    all_act, _ = pop.process_batch(images_t)
+    print(f"Protos activés : {all_act[0].float().mean():.4f}\n")
 
     # ── Entraînement ─────────────────────────────────────────
-    start_time  = time.time()
-    best_acc    = 0.0
-    best_protos = [p.clone() for p in pop.prototypes]
-    best_counts = [c.clone() for c in pop.class_counts]
-    best_class  = [c.clone() for c in pop.proto_class]
-    patience    = 0
+    start_time   = time.time()
+    best_acc     = 0.0
+    best_protos  = [p.clone() for p in pop.prototypes]
+    best_counts  = [c.clone() for c in pop.class_counts]
+    best_class   = [c.clone() for c in pop.proto_class]
+    patience     = 0
     max_patience = 7
-    history     = []
+    history      = []
 
     for epoch in range(args.epochs):
         lr_epoch = args.lr * (0.95 ** epoch)
@@ -161,7 +133,7 @@ def run(args):
             train_images, train_labels, DEVICE, batch_size=2)
 
         preds   = trainer.predict_batch(val_images, batch_size=4)
-        correct = sum(p == l for p, l in zip(preds, val_labels) 
+        correct = sum(p == l for p, l in zip(preds, val_labels)
                       if p is not None)
         acc     = correct / len(val_images)
         history.append(acc)
@@ -184,7 +156,6 @@ def run(args):
             print(f"\n  Early stopping à l'epoch {epoch+1}")
             break
 
-    # Restaurer meilleur modèle
     pop.prototypes   = best_protos
     pop.class_counts = best_counts
     pop.proto_class  = best_class
@@ -198,21 +169,22 @@ def run(args):
 
     # ── Sauvegarde ───────────────────────────────────────────
     result = {
-        "run_name"   : run_name,
-        "model"      : "EpitopeNet-CNN",
-        "cnn_layers" : args.cnn_layers,
-        "seed"       : args.seed,
-        "patch_sizes": str(patch_sizes),
-        "theta"      : args.theta,
-        "lr"         : args.lr,
-        "num_cells"  : args.num_cells,
-        "K"          : args.K,
-        "acc"        : best_acc,
-        "best_epoch" : best_epoch,
-        "n_epochs"   : len(history),
-        "time_min"   : elapsed_min,
-        "val_set"    : "clean_773",
-        "history"    : history,
+        "run_name"      : run_name,
+        "model"         : "EpitopeNet-Gabor",
+        "n_orientations": args.n_orientations,
+        "n_scales"      : args.n_scales,
+        "seed"          : args.seed,
+        "patch_sizes"   : str(patch_sizes),
+        "theta"         : args.theta,
+        "lr"            : args.lr,
+        "num_cells"     : args.num_cells,
+        "K"             : args.K,
+        "acc"           : best_acc,
+        "best_epoch"    : best_epoch,
+        "n_epochs"      : len(history),
+        "time_min"      : elapsed_min,
+        "val_set"       : "clean_773",
+        "history"       : history,
     }
 
     with open(f"figs/{run_name}.json", "w") as f:
