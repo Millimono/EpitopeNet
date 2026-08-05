@@ -82,11 +82,6 @@ class PopulationBMultiScale:
         patches_norm = (patches - mean) / std
         
         return torch.cat([patches_norm, intensity], dim=-1)
-
-    # def preprocess_patches(self, patches, keep_intensity=True):
-    #     """Normalisation L2 pour features CNN."""
-    #     norm = patches.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-    #     return patches / norm
     
     def process_batch(self, images):
         """Traite un batch d'images pour toutes les échelles."""
@@ -331,9 +326,18 @@ class PopulationBMultiScaleCNN(PopulationBMultiScale):
     #     mean = patches.mean(dim=-1, keepdim=True)
     #     std  = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
     #     return (patches - mean) / std
-    def preprocess_patches(self, patches, keep_intensity=True):
-            """Normalisation L2 pour features CNN."""
-            norm = patches.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-            return patches / norm
 
+    def preprocess_patches(self, patches, keep_intensity=True):
+        """
+        Clipping + z-score pour features CNN.
+        Réduit l'impact des valeurs aberrantes.
+        """
+        # Clipper à 3 std
+        m   = patches.mean()
+        s   = patches.std()
+        patches = patches.clamp(m - 3 * s, m + 3 * s)
+        # z-score par patch
+        mean = patches.mean(dim=-1, keepdim=True)
+        std  = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
+        return (patches - mean) / std
 #
