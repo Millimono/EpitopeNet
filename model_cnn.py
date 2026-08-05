@@ -356,10 +356,27 @@ class PopulationBMultiScaleGabor(PopulationBMultiScale):
                   f"{B_scale} protos, {D_new} features "
                   f"({self.n_gabor_filters} canaux)")
     
+    # def extract_patches_batch(self, images, patch_size):
+    #     """
+    #     Extraire patches sur feature map Gabor.
+    #     """
+    #     if images.dim() == 3:
+    #         images = images.unsqueeze(1)
+        
+    #     with torch.no_grad():
+    #         features = self.encoder(images)
+    #     # features : (N, n_filters, H, W)
+        
+    #     patches = F.unfold(
+    #         features,
+    #         kernel_size=patch_size,
+    #         stride=1
+    #     )
+    #     return patches.transpose(1, 2)
+    #     # shape : (N, P, n_filters × ph × pw)
+
     def extract_patches_batch(self, images, patch_size):
-        """
-        Extraire patches sur feature map Gabor.
-        """
+        """Extraire patches sur feature map Gabor sous-échantillonnée."""
         if images.dim() == 3:
             images = images.unsqueeze(1)
         
@@ -367,13 +384,17 @@ class PopulationBMultiScaleGabor(PopulationBMultiScale):
             features = self.encoder(images)
         # features : (N, n_filters, H, W)
         
+        # ← SOUS-ÉCHANTILLONNER pour réduire mémoire
+        features = F.avg_pool2d(features, kernel_size=4, stride=4)
+        # feature map : 256×256 → 64×64
+        
         patches = F.unfold(
             features,
             kernel_size=patch_size,
             stride=1
         )
         return patches.transpose(1, 2)
-        # shape : (N, P, n_filters × ph × pw)
+
     
     def preprocess_patches(self, patches, keep_intensity=True):
         """Z-score par patch sur features Gabor."""
