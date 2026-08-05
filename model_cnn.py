@@ -69,19 +69,24 @@ class PopulationBMultiScale:
         )
         return patches.transpose(1, 2)
     
+    # def preprocess_patches(self, patches, keep_intensity=True):
+    #     """Normalisation patches + feature intensité optionnelle."""
+    #     if not self.use_intensity or not keep_intensity:
+    #         mean = patches.mean(dim=-1, keepdim=True)
+    #         std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
+    #         return (patches - mean) / std
+        
+    #     intensity = patches.mean(dim=-1, keepdim=True)
+    #     mean = patches.mean(dim=-1, keepdim=True)
+    #     std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
+    #     patches_norm = (patches - mean) / std
+        
+    #     return torch.cat([patches_norm, intensity], dim=-1)
+
     def preprocess_patches(self, patches, keep_intensity=True):
-        """Normalisation patches + feature intensité optionnelle."""
-        if not self.use_intensity or not keep_intensity:
-            mean = patches.mean(dim=-1, keepdim=True)
-            std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
-            return (patches - mean) / std
-        
-        intensity = patches.mean(dim=-1, keepdim=True)
-        mean = patches.mean(dim=-1, keepdim=True)
-        std = patches.std(dim=-1, keepdim=True).clamp(min=1e-8)
-        patches_norm = (patches - mean) / std
-        
-        return torch.cat([patches_norm, intensity], dim=-1)
+        """Normalisation L2 pour features CNN."""
+        norm = patches.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        return patches / norm
     
     def process_batch(self, images):
         """Traite un batch d'images pour toutes les échelles."""
